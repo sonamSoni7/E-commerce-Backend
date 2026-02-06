@@ -71,6 +71,11 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static("public"));
 
+// Root Route
+app.get("/", (req, res) => {
+  res.send("Backend is running successfully");
+});
+
 // API Routes
 app.use("/api/user", authRouter);
 app.use("/api/auth", authEnhancedRouter);
