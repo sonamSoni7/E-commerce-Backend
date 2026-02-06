@@ -37,14 +37,10 @@ const sendOTP = asyncHandler(async (req, res) => {
   await user.save();
 
   // TODO: Send OTP via SMS/Email service
-  // For now, returning OTP in response (REMOVE IN PRODUCTION)
-  console.log(`OTP for ${type}:`, otp);
 
   res.json({
     success: true,
     message: `OTP sent to your ${type}`,
-    // Remove this in production:
-    otp: process.env.NODE_ENV === 'development' ? otp : undefined,
   });
 });
 
