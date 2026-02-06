@@ -4,40 +4,31 @@ const asyncHandler = require("express-async-handler");
 
 const uploadImages = asyncHandler(async (req, res) => {
   try {
+    const { cloudinaryUploadStream, cloudinaryDeleteImg } = require("../utils/cloudinary");
     const urls = [];
     const files = req.files;
     for (const file of files) {
-      const { filename } = file;
-      // Construct the URL path relative to the public directory
-      // Note: uploadImage middleware saves to public/images/products/
-      const url = `/images/products/${filename}`;
+      // file.buffer contains the binary data since we used memoryStorage
+      const result = await cloudinaryUploadStream(file.buffer);
       urls.push({
-        url: url,
-        public_id: filename, // Using filename as public_id for simplicity
-        asset_id: filename // redundant but keeping structure
+        url: result.url,
+        public_id: result.public_id,
+        asset_id: result.asset_id
       });
     }
     const images = urls;
     res.json(images);
   } catch (error) {
-    console.error("Upload Control Error:", error);
     throw new Error(error);
   }
 });
 
 const deleteImages = asyncHandler(async (req, res) => {
-  const { id } = req.params; // id here is the filename
+  const { id } = req.params;
   try {
-    const filePath = `public/images/products/${id}`;
-    // Check if file exists before deleting preventing crash
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      res.json({ message: "Deleted" });
-    } else {
-      // Also check checking without 'products' subfolder just in case or return success
-      res.json({ message: "File not found or already deleted" });
-    }
-
+    const { cloudinaryDeleteImg } = require("../utils/cloudinary");
+    const deleted = await cloudinaryDeleteImg(id);
+    res.json({ message: "Deleted" });
   } catch (error) {
     throw new Error(error);
   }

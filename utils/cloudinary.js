@@ -1,4 +1,4 @@
-const cloudinary = require("cloudinary");
+const cloudinary = require("cloudinary").v2;
 
 cloudinary.config({
   cloud_name: process.env.CLOUD_NAME,
@@ -10,8 +10,8 @@ const cloudinaryUploadImg = async (fileToUploads) => {
   return new Promise((resolve, reject) => {
     cloudinary.uploader.upload(fileToUploads, (error, result) => {
       if (error) {
-         console.log("Cloudinary Upload Error:", error);
-         reject(error);
+        console.log("Cloudinary Upload Error:", error);
+        reject(error);
       } else {
         resolve(
           {
@@ -44,4 +44,23 @@ const cloudinaryDeleteImg = async (fileToDelete) => {
   });
 };
 
-module.exports = { cloudinaryUploadImg, cloudinaryDeleteImg };
+const cloudinaryUploadStream = (buffer) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { resource_type: "auto" },
+      (error, result) => {
+        if (error) {
+          return reject(error);
+        }
+        resolve({
+          url: result.secure_url,
+          asset_id: result.asset_id,
+          public_id: result.public_id,
+        });
+      }
+    );
+    stream.end(buffer);
+  });
+};
+
+module.exports = { cloudinaryUploadImg, cloudinaryDeleteImg, cloudinaryUploadStream };
