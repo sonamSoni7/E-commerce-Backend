@@ -4,12 +4,13 @@ const asyncHandler = require("express-async-handler");
 
 const uploadImages = asyncHandler(async (req, res) => {
   try {
-    const { cloudinaryUploadStream, cloudinaryDeleteImg } = require("../utils/cloudinary");
+    const { cloudinaryUploadStream } = require("../utils/cloudinary");
     const urls = [];
     const files = req.files;
+    const transformations = { width: 1000, height: 1000, crop: "limit" };
     for (const file of files) {
       // file.buffer contains the binary data since we used memoryStorage
-      const result = await cloudinaryUploadStream(file.buffer);
+      const result = await cloudinaryUploadStream(file.buffer, transformations);
       urls.push({
         url: result.url,
         public_id: result.public_id,

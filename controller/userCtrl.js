@@ -420,24 +420,95 @@ const updateProductQuantityFromCart = asyncHandler(async (req, res) => {
   }
 });
 
+const applyCoupon = asyncHandler(async (req, res) => {
+  const { coupon } = req.body;
+  const { _id } = req.user;
+  validateMongoDbId(_id);
+  const validCoupon = await Coupon.findOne({ name: coupon });
+  if (validCoupon === null) {
+    throw new Error("Invalid Coupon");
+  }
+  const user = await User.findOne({ _id });
+  let { cart } = await Cart.findOne({ userId: _id }).populate("productId");
+  let totalAmount = 0;
+  // Calculate total amount from cart items
+  // Note: Here we are using price from cart. For extra security, we could fetch from Product model.
+  // Given the requirement to match frontend suggestion, let's fetch products to be sure.
+  const cartItems = await Cart.find({ userId: _id }).populate("productId");
+
+  for (let i = 0; i < cartItems.length; i++) {
+    totalAmount += cartItems[i].price * cartItems[i].quantity;
+  }
+
+  // Check if coupon is expired
+  if (validCoupon.expiry < Date.now()) {
+    throw new Error("Coupon Expired");
+  }
+
+  let totalAfterDiscount = (
+    totalAmount -
+    (totalAmount * validCoupon.discount) / 100
+  ).toFixed(2);
+
+  await User.findOneAndUpdate(
+    { _id },
+    { cartTotal: totalAmount, totalAfterDiscount, couponApplied: validCoupon._id }, // Store applied coupon ID
+    { new: true }
+  );
+
+  res.json(totalAfterDiscount);
+});
+
 const createOrder = asyncHandler(async (req, res) => {
   const {
     shippingInfo,
-    orderItems,
-    totalPrice,
-    totalPriceAfterDiscount,
     paymentInfo,
   } = req.body;
   const { _id } = req.user;
+  validateMongoDbId(_id);
+
+  // Fetch user and cart to calculate prices securely on backend
+  const user = await User.findById(_id);
+  const userCart = await Cart.find({ userId: _id });
+
+  let finalAmount = 0;
+  // Calculate base total
+  for (let i = 0; i < userCart.length; i++) {
+    finalAmount += userCart[i].price * userCart[i].quantity;
+  }
+  finalAmount += 100;
+
+  let totalPriceAfterDiscount = finalAmount;
+
+  // If coupon is applied in user session, recalculate
+  if (user.couponApplied) {
+    const coupon = await Coupon.findById(user.couponApplied);
+    if (coupon) {
+      totalPriceAfterDiscount = (
+        finalAmount - (finalAmount * coupon.discount) / 100
+      ).toFixed(2);
+    }
+  }
+
   try {
     const order = await Order.create({
       shippingInfo,
-      orderItems,
-      totalPrice,
-      totalPriceAfterDiscount,
+      orderItems: userCart,
+      totalPrice: finalAmount,
+      totalPriceAfterDiscount: totalPriceAfterDiscount,
       paymentInfo,
       user: _id,
     });
+
+    // Update product stock and sold count
+    for (let item of userCart) {
+      await Product.updateOne({ _id: item.productId }, { $inc: { quantity: -item.quantity, sold: +item.quantity } })
+    }
+
+    // Clear Cart and User Coupon state
+    await Cart.deleteMany({ userId: _id });
+    await User.findOneAndUpdate({ _id }, { cartTotal: 0, totalAfterDiscount: 0, couponApplied: null });
+
     res.json({
       order,
       success: true,
@@ -622,4 +693,5 @@ module.exports = {
 
   removeProductFromCart,
   updateProductQuantityFromCart,
+  applyCoupon,
 };

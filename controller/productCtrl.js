@@ -37,6 +37,13 @@ const deleteProduct = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateMongoDbId(id);
   try {
+    const { cloudinaryDeleteImg } = require("../utils/cloudinary");
+    const product = await Product.findById(id);
+    if (product && product.images && product.images.length > 0) {
+      for (const image of product.images) {
+        await cloudinaryDeleteImg(image.public_id);
+      }
+    }
     const deletedProduct = await Product.findByIdAndDelete(id);
 
     res.json(deletedProduct);

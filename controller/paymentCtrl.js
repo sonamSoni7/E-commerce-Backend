@@ -4,11 +4,31 @@ const instance = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
+const User = require("../models/userModel");
+const Cart = require("../models/cartModel");
+const Coupon = require("../models/couponModel");
 
 const checkout = async (req, res) => {
-  const { amount } = req.body;
+  const { _id } = req.user;
+  const user = await User.findById(_id);
+  const userCart = await Cart.find({ userId: _id });
+  let finalAmount = 0;
+  for (let i = 0; i < userCart.length; i++) {
+    finalAmount += userCart[i].price * userCart[i].quantity;
+  }
+  finalAmount += 100; //for shipping charges
+
+  if (user.couponApplied) {
+    const coupon = await Coupon.findById(user.couponApplied);
+    if (coupon) {
+      finalAmount = (
+        finalAmount - (finalAmount * coupon.discount) / 100
+      ).toFixed(2);
+    }
+  }
+
   const option = {
-    amount: amount * 100,
+    amount: finalAmount * 100,
     currency: "INR",
   };
   const order = await instance.orders.create(option);

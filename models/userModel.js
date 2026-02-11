@@ -14,7 +14,7 @@ var userSchema = new mongoose.Schema(
     },
     email: {
       type: String,
-      required: function() {
+      required: function () {
         return !this.mobile || this.authProvider === 'email';
       },
       unique: true,
@@ -22,7 +22,7 @@ var userSchema = new mongoose.Schema(
     },
     mobile: {
       type: String,
-      required: function() {
+      required: function () {
         return !this.email || this.authProvider === 'phone';
       },
       unique: true,
@@ -30,7 +30,7 @@ var userSchema = new mongoose.Schema(
     },
     password: {
       type: String,
-      required: function() {
+      required: function () {
         return this.authProvider === 'email' || this.authProvider === 'phone';
       },
     },
@@ -71,6 +71,19 @@ var userSchema = new mongoose.Schema(
     cart: {
       type: Array,
       default: [],
+    },
+    cartTotal: {
+      type: Number,
+      default: 0,
+    },
+    totalAfterDiscount: {
+      type: Number,
+      default: 0,
+    },
+    couponApplied: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Coupon",
+      default: null,
     },
     address: {
       type: String,

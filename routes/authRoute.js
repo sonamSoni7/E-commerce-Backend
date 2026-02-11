@@ -31,6 +31,7 @@ const {
   getAllOrders,
   getsingleOrder,
   updateOrder,
+  applyCoupon,
 } = require("../controller/userCtrl");
 const { authMiddleware, isAdmin } = require("../middlewares/authMiddleware");
 const { checkout, paymentVerification } = require("../controller/paymentCtrl");
@@ -45,6 +46,7 @@ router.put("/password", authMiddleware, updatePassword);
 router.post("/login", loginUserCtrl);
 router.post("/admin-login", loginAdmin);
 router.post("/cart", authMiddleware, userCart);
+router.post("/cart/apply-coupon", authMiddleware, applyCoupon);
 router.post("/order/checkout", authMiddleware, checkout);
 router.post("/order/paymentVerification", authMiddleware, paymentVerification);
 
