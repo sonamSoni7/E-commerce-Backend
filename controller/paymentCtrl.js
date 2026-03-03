@@ -12,23 +12,34 @@ const checkout = async (req, res) => {
   const { _id } = req.user;
   const user = await User.findById(_id);
   const userCart = await Cart.find({ userId: _id });
-  let finalAmount = 0;
-  for (let i = 0; i < userCart.length; i++) {
-    finalAmount += userCart[i].price * userCart[i].quantity;
-  }
-  finalAmount += 100; //for shipping charges
 
+  // Sum items subtotal only
+  let itemsSubtotal = 0;
+  for (let i = 0; i < userCart.length; i++) {
+    itemsSubtotal += userCart[i].price * userCart[i].quantity;
+  }
+
+  // Apply coupon discount to items ONLY (not to shipping)
+  let discountedItems = itemsSubtotal;
   if (user.couponApplied) {
     const coupon = await Coupon.findById(user.couponApplied);
-    if (coupon) {
-      finalAmount = (
-        finalAmount - (finalAmount * coupon.discount) / 100
-      ).toFixed(2);
+    if (coupon && new Date(coupon.expiry) >= new Date()) {
+      discountedItems = itemsSubtotal - (itemsSubtotal * coupon.discount) / 100;
+    } else if (coupon) {
+      // Coupon expired — clear it silently
+      await User.findByIdAndUpdate(_id, {
+        couponApplied: null,
+        totalAfterDiscount: 0,
+        cartTotal: 0,
+      });
     }
   }
 
+  // Add shipping AFTER discount
+  const finalAmount = parseFloat((discountedItems + 100).toFixed(2));
+
   const option = {
-    amount: finalAmount * 100,
+    amount: Math.round(finalAmount * 100), // paise, must be integer
     currency: "INR",
   };
   const order = await instance.orders.create(option);

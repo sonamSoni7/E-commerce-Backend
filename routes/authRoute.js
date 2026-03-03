@@ -18,9 +18,7 @@ const {
   saveAddress,
   userCart,
   getUserCart,
-
   createOrder,
-
   removeProductFromCart,
   updateProductQuantityFromCart,
   getMyOrders,
@@ -32,6 +30,8 @@ const {
   getsingleOrder,
   updateOrder,
   applyCoupon,
+  removeCoupon,
+  getCouponStatus,
 } = require("../controller/userCtrl");
 const { authMiddleware, isAdmin } = require("../middlewares/authMiddleware");
 const { checkout, paymentVerification } = require("../controller/paymentCtrl");
@@ -47,6 +47,8 @@ router.post("/login", loginUserCtrl);
 router.post("/admin-login", loginAdmin);
 router.post("/cart", authMiddleware, userCart);
 router.post("/cart/apply-coupon", authMiddleware, applyCoupon);
+router.delete("/cart/remove-coupon", authMiddleware, removeCoupon);
+router.get("/cart/coupon-status", authMiddleware, getCouponStatus);
 router.post("/order/checkout", authMiddleware, checkout);
 router.post("/order/paymentVerification", authMiddleware, paymentVerification);
 

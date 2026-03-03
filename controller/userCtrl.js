@@ -424,99 +424,215 @@ const applyCoupon = asyncHandler(async (req, res) => {
   const { coupon } = req.body;
   const { _id } = req.user;
   validateMongoDbId(_id);
+
+  // Validate coupon exists
   const validCoupon = await Coupon.findOne({ name: coupon });
-  if (validCoupon === null) {
+  if (!validCoupon) {
     throw new Error("Invalid Coupon");
   }
-  const user = await User.findOne({ _id });
-  let { cart } = await Cart.findOne({ userId: _id }).populate("productId");
-  let totalAmount = 0;
-  // Calculate total amount from cart items
-  // Note: Here we are using price from cart. For extra security, we could fetch from Product model.
-  // Given the requirement to match frontend suggestion, let's fetch products to be sure.
-  const cartItems = await Cart.find({ userId: _id }).populate("productId");
 
-  for (let i = 0; i < cartItems.length; i++) {
-    totalAmount += cartItems[i].price * cartItems[i].quantity;
-  }
-
-  // Check if coupon is expired
-  if (validCoupon.expiry < Date.now()) {
+  // Fail-fast: check expiry before any DB writes
+  if (new Date(validCoupon.expiry) < new Date()) {
     throw new Error("Coupon Expired");
   }
 
-  let totalAfterDiscount = (
-    totalAmount -
-    (totalAmount * validCoupon.discount) / 100
+  // Sum the cart items (items subtotal only — discount does NOT apply to shipping)
+  const cartItems = await Cart.find({ userId: _id });
+  let itemsSubtotal = 0;
+  for (let i = 0; i < cartItems.length; i++) {
+    itemsSubtotal += cartItems[i].price * cartItems[i].quantity;
+  }
+
+  if (itemsSubtotal === 0) {
+    throw new Error("Cart is empty");
+  }
+
+  // Discount applied to items only
+  const totalAfterDiscount = (
+    itemsSubtotal - (itemsSubtotal * validCoupon.discount) / 100
   ).toFixed(2);
 
   await User.findOneAndUpdate(
     { _id },
-    { cartTotal: totalAmount, totalAfterDiscount, couponApplied: validCoupon._id }, // Store applied coupon ID
+    {
+      cartTotal: itemsSubtotal,
+      totalAfterDiscount: Number(totalAfterDiscount),
+      couponApplied: validCoupon._id,
+    },
     { new: true }
   );
 
   res.json(totalAfterDiscount);
 });
 
-const createOrder = asyncHandler(async (req, res) => {
-  const {
-    shippingInfo,
-    paymentInfo,
-  } = req.body;
+// Remove an applied coupon from the user session
+const removeCoupon = asyncHandler(async (req, res) => {
+  const { _id } = req.user;
+  validateMongoDbId(_id);
+  await User.findOneAndUpdate(
+    { _id },
+    { couponApplied: null, totalAfterDiscount: 0, cartTotal: 0 },
+    { new: true }
+  );
+  res.json({ message: "Coupon removed" });
+});
+
+// Return the currently applied coupon status for the logged-in user
+const getCouponStatus = asyncHandler(async (req, res) => {
   const { _id } = req.user;
   validateMongoDbId(_id);
 
-  // Fetch user and cart to calculate prices securely on backend
-  const user = await User.findById(_id);
-  const userCart = await Cart.find({ userId: _id });
-
-  let finalAmount = 0;
-  // Calculate base total
-  for (let i = 0; i < userCart.length; i++) {
-    finalAmount += userCart[i].price * userCart[i].quantity;
-  }
-  finalAmount += 100;
-
-  let totalPriceAfterDiscount = finalAmount;
-
-  // If coupon is applied in user session, recalculate
-  if (user.couponApplied) {
-    const coupon = await Coupon.findById(user.couponApplied);
-    if (coupon) {
-      totalPriceAfterDiscount = (
-        finalAmount - (finalAmount * coupon.discount) / 100
-      ).toFixed(2);
-    }
+  const user = await User.findById(_id).populate("couponApplied");
+  if (!user.couponApplied) {
+    return res.json({ applied: false });
   }
 
+  const coupon = user.couponApplied;
+  const isExpired = new Date(coupon.expiry) < new Date();
+
+  if (isExpired) {
+    // Auto-clear the expired coupon server-side
+    await User.findOneAndUpdate(
+      { _id },
+      { couponApplied: null, totalAfterDiscount: 0, cartTotal: 0 }
+    );
+    return res.json({ applied: false, expired: true, name: coupon.name });
+  }
+
+  return res.json({
+    applied: true,
+    name: coupon.name,
+    discount: coupon.discount,
+    expiry: coupon.expiry,
+    totalAfterDiscount: user.totalAfterDiscount,
+  });
+});
+
+const createOrder = async (req, res) => {
   try {
+    const { shippingInfo, paymentInfo } = req.body;
+    const { _id } = req.user;
+    validateMongoDbId(_id);
+
+    const DELIVERY_CHARGE = 100;
+    // 1. Validate inputs
+    if (!shippingInfo) {
+      return res.status(400).json({ message: "Shipping info is required" });
+    }
+    if (!paymentInfo) {
+      return res.status(400).json({ message: "Payment info is required" });
+    }
+
+    // 2. Fetch cart BEFORE doing anything else — use .lean() for plain JS objects
+    const userCart = await Cart.find({ userId: _id }).lean();
+    console.log("[createOrder] cart items:", userCart.length);
+    // Dump first cart item to see exact field names
+    if (userCart.length > 0) {
+      console.log("[createOrder] cart[0] raw:", JSON.stringify(userCart[0]));
+    }
+
+    if (!userCart || userCart.length === 0) {
+      return res.status(400).json({ message: "Cart is empty, cannot create order" });
+    }
+
+    // 3. Calculate items subtotal
+    let itemsSubtotal = 0;
+    for (let i = 0; i < userCart.length; i++) {
+      itemsSubtotal += userCart[i].price * userCart[i].quantity;
+    }
+    const totalPrice = itemsSubtotal + DELIVERY_CHARGE;
+
+    // 4. Razorpay-charged amount is the ground truth for what the user paid
+    const razorpayChargedAmount = paymentInfo?.amount
+      ? Number(paymentInfo.amount) / 100
+      : totalPrice;
+
+
+    // 5. Map cart items → Order schema shape
+    const orderItemsMapped = userCart.map((item) => {
+      // productId is the field name in Cart schema
+      const productRef = item.productId;
+      console.log("[createOrder] item productId:", productRef, "color:", item.color);
+      const mapped = {
+        product: productRef,
+        quantity: item.quantity,
+        price: item.price,
+      };
+      if (item.color) mapped.color = item.color;
+      return mapped;
+    });
+
+    // 6. Sanitize paymentInfo — only include fields that exist in Order schema
+    const sanitizedPaymentInfo = {
+      razorpayOrderId: paymentInfo.razorpayOrderId || "",
+      razorpayPaymentId: paymentInfo.razorpayPaymentId || "",
+    };
+
+    // 7. Sanitize shippingInfo — coerce pincode to Number
+    const sanitizedShippingInfo = {
+      firstname: shippingInfo.firstname,
+      lastname: shippingInfo.lastname,
+      address: shippingInfo.address,
+      deliveryCharge:DELIVERY_CHARGE,
+      city: shippingInfo.city,
+      state: shippingInfo.state,
+      pincode: Number(shippingInfo.pincode),
+      other: shippingInfo.other || "",
+    };
+
+    console.log("[createOrder] sanitizedPaymentInfo:", JSON.stringify(sanitizedPaymentInfo));
+    console.log("[createOrder] sanitizedShippingInfo:", JSON.stringify(sanitizedShippingInfo));
+    console.log("[createOrder] orderItems count:", orderItemsMapped.length);
+
+    // 8. Create the order
     const order = await Order.create({
-      shippingInfo,
-      orderItems: userCart,
-      totalPrice: finalAmount,
-      totalPriceAfterDiscount: totalPriceAfterDiscount,
-      paymentInfo,
+      shippingInfo: sanitizedShippingInfo,
+      orderItems: orderItemsMapped,
+      totalPrice,
+      totalPriceAfterDiscount: razorpayChargedAmount,
+      paymentInfo: sanitizedPaymentInfo,
       user: _id,
     });
 
-    // Update product stock and sold count
+    console.log("[createOrder] order created:", order._id);
+
+    // 9. Update product stock and sold count
     for (let item of userCart) {
-      await Product.updateOne({ _id: item.productId }, { $inc: { quantity: -item.quantity, sold: +item.quantity } })
+      await Product.updateOne(
+        { _id: item.productId },
+        { $inc: { quantity: -item.quantity, sold: +item.quantity } }
+      );
     }
 
-    // Clear Cart and User Coupon state
+    // 10. Clear cart and reset coupon state
     await Cart.deleteMany({ userId: _id });
-    await User.findOneAndUpdate({ _id }, { cartTotal: 0, totalAfterDiscount: 0, couponApplied: null });
+    await User.findOneAndUpdate(
+      { _id },
+      { cartTotal: 0, totalAfterDiscount: 0, couponApplied: null }
+    );
 
-    res.json({
-      order,
-      success: true,
-    });
+    console.log("=== [createOrder] SUCCESS ===");
+    res.json({ order, success: true });
   } catch (error) {
-    throw new Error(error);
+    console.error("=== [createOrder] ERROR ===");
+    console.error("[createOrder] message:", error.message);
+    console.error("[createOrder] name:", error.name);
+    if (error.errors) {
+      // Mongoose validation error — print each failing field
+      Object.keys(error.errors).forEach((field) => {
+        console.error(`[createOrder] field "${field}":`, error.errors[field].message);
+      });
+    }
+    console.error("[createOrder] stack:", error.stack);
+    res.status(500).json({
+      status: "fail",
+      message: error.message,
+      validationErrors: error.errors
+        ? Object.keys(error.errors).map((f) => `${f}: ${error.errors[f].message}`)
+        : undefined,
+    });
   }
-});
+};
 
 const getMyOrders = asyncHandler(async (req, res) => {
   const { _id } = req.user;
@@ -690,8 +806,9 @@ module.exports = {
   getsingleOrder,
   updateOrder,
   getYearlyTotalOrder,
-
   removeProductFromCart,
   updateProductQuantityFromCart,
   applyCoupon,
+  removeCoupon,
+  getCouponStatus,
 };
